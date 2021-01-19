@@ -18,41 +18,39 @@ library(ggthemes)
 
 #some data cleaning
 
-x<-cbind(read_dta('https://www.dropbox.com/s/yxgigmtcrut9fii/yop_analysis.dta?dl=1') %>% 
-  filter(e1==1) %>%  #filter results only from endline survey1
-  select(assigned,loan_100k,loan_1mil,grantsize_pp_US_est3,
+x<-read_dta('https://www.dropbox.com/s/yxgigmtcrut9fii/yop_analysis.dta?dl=1') %>% 
+  filter(e2==1) %>%  #filter results only from endline survey1
+  select(assigned,S_K,S_H,S_P_m,admin_cost_us,
          risk_aversion,female,urban,age,live_together,
-                       literate,voc_training,inschool,aggression_n,
-                       violence_others,education,wealthindex,
-                       risk_aversion,profits4w_real_p99_e),
-  read_dta('https://www.dropbox.com/s/fa7lh4qe8nszxdb/yop_fulldata.dta?dl=1') %>%
-  filter(e1==1) %>%
-  select(hhsize,acres,credit_access))
+         wealthindex,bizasset_val_real_p99_e,group_female,
+         group_roster_size,avgdisteduc,grp_leader,
+         group_age,group_existed,nonag_dummy,zero_hours,
+         skilledtrade7da_zero,highskill7da_zero)
 
 #compute proportion of all NA values
 sum(x%>%is.na())/(ncol(x)*nrow(x))
 
 #compute proportion of missing outcome values
-sum(x$profits4w_real_p99_e%>%is.na())/nrow(x)
+sum(x$bizasset_val_real_p99_e%>%is.na())/nrow(x)
 
 #eliminate NA values (assume missingness is random)
 #df<-x[which(complete.cases(x)),]
 
 #impute outcome values using median (assume missingness is non random)
-df<-x %>% mutate(profits4w_real_p99_e=ifelse(is.na(profits4w_real_p99_e),
-                                             median(x$profits4w_real_p99_e,na.rm = T),
-                                             profits4w_real_p99_e))
+df<-x %>% mutate(bizasset_val_real_p99_e=ifelse(is.na(bizasset_val_real_p99_e),
+                                                median(x$bizasset_val_real_p99_e,na.rm = T),
+                                                bizasset_val_real_p99_e))
 
 #impute NA values for other vars
-df<-rfImpute(profits4w_real_p99_e~.,df,ntree=500,iter=6)
+df<-rfImpute(bizasset_val_real_p99_e~.,df,ntree=500,iter=6)
 
 # create empty dataframes to store values
 n_split<-100
 n_group<-5
-blp_coef<-data.frame(B0=1:n_split,SE_B0=1:n_split,
-                     P_value_B0=1:n_split,
-                     B1=1:n_split,SE_B1=1:n_split,
-                     P_value_B1=1:n_split)
+blp_coef<-data.frame(B1=1:n_split,SE_B1=1:n_split,
+                     P_value_B1=1:n_split,
+                     B2=1:n_split,SE_B2=1:n_split,
+                     P_value_B2=1:n_split)
 
 gate_coef<-matrix(ncol = n_group*2,nrow = n_split) %>% as.data.frame()
 colnames(gate_coef)<-paste(c("G",'SE_G'), rep(1:n_group, each=2), sep = "")
@@ -72,26 +70,27 @@ for(i in 1:n_split){
   main_ind<-which(random>0.5)
   aux_ind<-which(random<0.5)
   aux_df<-df[aux_ind,]
+  main_df<-df[main_ind,]
   
   # train data on auxiliary sample
-  rftreat<-randomForest(profits4w_real_p99_e~., data = (aux_df%>%filter(assigned==1)),
+  rftreat<-randomForest(bizasset_val_real_p99_e~., data = (aux_df%>%filter(assigned==1)),
                         ntree=500,nodesize=5)  
-  rfbase<-randomForest(profits4w_real_p99_e~., data = (aux_df%>%filter(assigned==0)), 
+  rfbase<-randomForest(bizasset_val_real_p99_e~., data = (aux_df%>%filter(assigned==0)), 
                        ntree=500,nodesize=5)
   
-  # predict baseline and treatment outcomes
-  B<-predict(rfbase,df)
-  treat<-predict(rftreat,df)
+  # predict baseline and treatment outcomes on main sample
+  B<-predict(rfbase,main_df)
+  treat<-predict(rftreat,main_df)
   
   # specifying regression variables
-  S<-treat-B #CATE
-  ES<-mean(S)
-  p<-mean(df$assigned) #take mean as propensity score
-  x<-S-ES #excess CATE
-  w<-df$assigned-p #weighted treatment var
+  S<-treat-B #CATE: what the algorithm predicts is an individual's treatment effect
+  ES<-mean(S) # the average predicted treatment effect
+  p<-mean(main_df$assigned) #take mean as propensity score
+  x<-S-ES #excess CATE: how far one's predicted treatment effect is from the mean
+  w<-main_df$assigned-p #weighted treatment var
   
   #derive Best Linear Predictor from main sample
-  blp<-lm(profits4w_real_p99_e~B+w+I((w*x)),data=cbind(df,B,S,x,w)[main_ind,])
+  blp<-lm(bizasset_val_real_p99_e~B+w+I((w*x)),data=cbind(main_df,B,S,x,w))
   blp_coef[i,]<-c(blp$coefficients[3],summary(blp)$coefficients[3:4,c(2,4)][1,],
                   blp$coefficients[4],summary(blp)$coefficients[3:4,c(2,4)][2,])
   
@@ -101,11 +100,11 @@ for(i in 1:n_split){
   
   for(k in 1:n_group){  
     G<-ifelse(S>qt[k] & S<qt[k+1],1,0)
-    gate<-lm(profits4w_real_p99_e~B+I(w*G),data = cbind(df,B,S,x,w,G)[main_ind,])
+    gate<-lm(bizasset_val_real_p99_e~B+I(w*G),data = cbind(main_df,B,S,x,w,G))
     gate_coef[i,c((2*k)-1,2*k)]<-summary(gate)$coefficients[3,c(1,2)]
-
+    
     # data preparation for later
-    gate_mean[i,((k*mcol)-(mcol-1)):(k*mcol)]<-apply(df[which(G==1),],2,mean)
+    gate_mean[i,((k*mcol)-(mcol-1)):(k*mcol)]<-apply(main_df[which(G==1),],2,mean)
   }  
 }  
 
@@ -130,7 +129,8 @@ for(k in 1:n_group) {
 }
 
 #choose covariates to plot
-sub<-c('education','hhsize','age','wealthindex')
+sub<-c('S_K','S_H','S_P_m','wealthindex','age','group_age','risk_aversion','zero_hours',
+       'highskill7da_zero')
 het_sub<-het[,c('gate',sub)] %>%
   gather("covariate", "median", -gate)
 
@@ -138,3 +138,4 @@ ggplot(het_sub, aes(gate, median, color = covariate)) +
   geom_line() +
   facet_wrap(~covariate,scales = "free_y") +
   theme_fivethirtyeight()
+
