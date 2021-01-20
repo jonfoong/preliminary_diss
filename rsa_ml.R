@@ -21,11 +21,13 @@ library(ggthemes)
 x<-read_dta('https://www.dropbox.com/s/yxgigmtcrut9fii/yop_analysis.dta?dl=1') %>% 
   filter(e2==1) %>%  #filter results only from endline survey1
   select(assigned,S_K,S_H,S_P_m,admin_cost_us,
-         risk_aversion,female,urban,age,live_together,
+         risk_aversion,female,urban,age,
          wealthindex,bizasset_val_real_p99_e,group_female,
          group_roster_size,avgdisteduc,grp_leader,
          group_age,group_existed,nonag_dummy,zero_hours,
-         skilledtrade7da_zero,highskill7da_zero)
+         skilledtrade7da_zero,highskill7da_zero,adl,aggression_n,
+         ingroup_dynamic,ingroup_hetero,acto7da_zero,D_1,D_2,D_3,
+         D_4,D_5,D_6,D_7,D_8,D_9,D_10,D_11,D_12,D_13,chores7da_zero)
 
 #compute proportion of all NA values
 sum(x%>%is.na())/(ncol(x)*nrow(x))
@@ -34,7 +36,7 @@ sum(x%>%is.na())/(ncol(x)*nrow(x))
 sum(x$bizasset_val_real_p99_e%>%is.na())/nrow(x)
 
 #eliminate NA values (assume missingness is random)
-#df<-x[which(complete.cases(x)),]
+df<-x[which(complete.cases(x)),]
 
 #impute outcome values using median (assume missingness is non random)
 df<-x %>% mutate(bizasset_val_real_p99_e=ifelse(is.na(bizasset_val_real_p99_e),
@@ -108,6 +110,9 @@ for(i in 1:n_split){
   }  
 }  
 
+# check distribution of coefficient
+hist(blp_coef$B2,freq = F)
+
 # obtain median values
 # data for each column does not correspond to the same split
 apply(blp_coef,2,median) #median for Best Linear Predictor 
@@ -129,8 +134,8 @@ for(k in 1:n_group) {
 }
 
 #choose covariates to plot
-sub<-c('S_K','S_H','S_P_m','wealthindex','age','group_age','risk_aversion','zero_hours',
-       'highskill7da_zero')
+sub<-c('S_K','S_H','S_P_m','wealthindex','age','group_age','risk_aversion',
+       'aggression_n','highskill7da_zero')
 het_sub<-het[,c('gate',sub)] %>%
   gather("covariate", "median", -gate)
 
