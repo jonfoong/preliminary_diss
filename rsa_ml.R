@@ -20,31 +20,29 @@ library(ggthemes)
 
 x<-read_dta('https://www.dropbox.com/s/yxgigmtcrut9fii/yop_analysis.dta?dl=1') %>% 
   filter(e2==1) %>%  #filter results only from endline survey1
-  select(assigned,S_K,S_H,S_P_m,admin_cost_us,
-         risk_aversion,female,urban,age,
-         wealthindex,bizasset_val_real_p99_e,group_female,
-         group_roster_size,avgdisteduc,grp_leader,
-         group_age,group_existed,nonag_dummy,zero_hours,
-         skilledtrade7da_zero,highskill7da_zero,adl,aggression_n,
-         ingroup_dynamic,ingroup_hetero,acto7da_zero,D_1,D_2,D_3,
-         D_4,D_5,D_6,D_7,D_8,D_9,D_10,D_11,D_12,D_13,chores7da_zero)
+  select(assigned,S_K,S_H,S_P_m,
+         admin_cost_us,groupsize_est_e,grantsize_pp_US_est3,group_existed,group_age,ingroup_hetero,ingroup_dynamic,grp_leader,grp_chair,avgdisteduc,
+         lowskill7da_zero,lowbus7da_zero,skilledtrade7da_zero,highskill7da_zero,acto7da_zero,aghours7da_zero,chores7da_zero,zero_hours,nonag_dummy,
+         age,urban,ind_found_b,risk_aversion,inschool,
+         D_1,D_2,D_3,D_4,D_5,D_6,D_7,D_8,D_9,D_10,D_11,D_12,D_13,
+         profits4w_real_p99_e)
 
 #compute proportion of all NA values
 sum(x%>%is.na())/(ncol(x)*nrow(x))
 
 #compute proportion of missing outcome values
-sum(x$bizasset_val_real_p99_e%>%is.na())/nrow(x)
+sum(x$profits4w_real_p99_e%>%is.na())/nrow(x)
 
 #eliminate NA values (assume missingness is random)
 df<-x[which(complete.cases(x)),]
 
 #impute outcome values using median (assume missingness is non random)
-df<-x %>% mutate(bizasset_val_real_p99_e=ifelse(is.na(bizasset_val_real_p99_e),
-                                                median(x$bizasset_val_real_p99_e,na.rm = T),
-                                                bizasset_val_real_p99_e))
+df<-x %>% mutate(profits4w_real_p99_e=ifelse(is.na(profits4w_real_p99_e),
+                                             median(x$profits4w_real_p99_e,na.rm = T),
+                                             profits4w_real_p99_e))
 
 #impute NA values for other vars
-df<-rfImpute(bizasset_val_real_p99_e~.,df,ntree=500,iter=6)
+df<-rfImpute(profits4w_real_p99_e~.,df,ntree=500,iter=6)
 
 # create empty dataframes to store values
 n_split<-100
@@ -75,9 +73,9 @@ for(i in 1:n_split){
   main_df<-df[main_ind,]
   
   # train data on auxiliary sample
-  rftreat<-randomForest(bizasset_val_real_p99_e~., data = (aux_df%>%filter(assigned==1)),
+  rftreat<-randomForest(profits4w_real_p99_e~., data = (aux_df%>%filter(assigned==1)),
                         ntree=500,nodesize=5)  
-  rfbase<-randomForest(bizasset_val_real_p99_e~., data = (aux_df%>%filter(assigned==0)), 
+  rfbase<-randomForest(profits4w_real_p99_e~., data = (aux_df%>%filter(assigned==0)), 
                        ntree=500,nodesize=5)
   
   # predict baseline and treatment outcomes on main sample
@@ -92,7 +90,7 @@ for(i in 1:n_split){
   w<-main_df$assigned-p #weighted treatment var
   
   #derive Best Linear Predictor from main sample
-  blp<-lm(bizasset_val_real_p99_e~B+w+I((w*x)),data=cbind(main_df,B,S,x,w))
+  blp<-lm(profits4w_real_p99_e~B+w+I((w*x)),data=cbind(main_df,B,S,x,w))
   blp_coef[i,]<-c(blp$coefficients[3],summary(blp)$coefficients[3:4,c(2,4)][1,],
                   blp$coefficients[4],summary(blp)$coefficients[3:4,c(2,4)][2,])
   
@@ -102,7 +100,7 @@ for(i in 1:n_split){
   
   for(k in 1:n_group){  
     G<-ifelse(S>qt[k] & S<qt[k+1],1,0)
-    gate<-lm(bizasset_val_real_p99_e~B+I(w*G),data = cbind(main_df,B,S,x,w,G))
+    gate<-lm(profits4w_real_p99_e~B+I(w*G),data = cbind(main_df,B,S,x,w,G))
     gate_coef[i,c((2*k)-1,2*k)]<-summary(gate)$coefficients[3,c(1,2)]
     
     # data preparation for later
@@ -110,8 +108,8 @@ for(i in 1:n_split){
   }  
 }  
 
-# check distribution of coefficient
-hist(blp_coef$B2,freq = F)
+# check distribution of p value
+hist(blp_coef$P_value_B2)
 
 # obtain median values
 # data for each column does not correspond to the same split
@@ -134,8 +132,8 @@ for(k in 1:n_group) {
 }
 
 #choose covariates to plot
-sub<-c('S_K','S_H','S_P_m','wealthindex','age','group_age','risk_aversion',
-       'aggression_n','highskill7da_zero')
+sub<-c('S_K','S_H','S_P_m','age','group_age','risk_aversion',
+       'highskill7da_zero','admin_cost_us','avgdisteduc')
 het_sub<-het[,c('gate',sub)] %>%
   gather("covariate", "median", -gate)
 
