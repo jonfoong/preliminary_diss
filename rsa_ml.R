@@ -52,8 +52,17 @@ blp_coef<-data.frame(B1=1:n_split,SE_B1=1:n_split,
                      B2=1:n_split,SE_B2=1:n_split,
                      P_value_B2=1:n_split)
 
-gate_coef<-matrix(ncol = n_group*2,nrow = n_split) %>% as.data.frame()
-colnames(gate_coef)<-paste(c("G",'SE_G'), rep(1:n_group, each=2), sep = "")
+gate_coef<-matrix(ncol = n_group*3,nrow = n_split) %>% as.data.frame()
+colnames(gate_coef)<-paste(c("G",'SE_G','P_value'), rep(1:n_group, each=3), sep = "")
+
+gate_diff<-data.frame(diff=1:n_split,SE=1:n_split,P_value=1:n_split)
+
+clan<-matrix(ncol = 6,nrow = n_split*(ncol(df)-15)) %>% as.data.frame()
+colnames(clan)<-c('estimate','SE','lower_conf','upper_conf','P_value','var')
+
+clan_os<-matrix(ncol = 7,nrow = n_split*(ncol(df)-15)) %>% as.data.frame()
+colnames(clan_os)<-c('g1','g1_lower_conf','g1_upper_conf','gk','gk_lower_conf','gk_upper_conf','var')
+
 
 #f<-which(sapply(df, class) == "factor") 
 #mcol<-ncol(df[,-f])
@@ -97,15 +106,43 @@ for(i in 1:n_split){
   
   #Group Average Treatment Effect
   qt<-quantile(S,seq(0,1,length.out = n_group+1))
+  diff<-cbind(main_df,B,S,w) %>% 
+    filter(S<=qt[2]|S>qt[n_group]) %>%
+    mutate(G=ifelse((S>qt[n_group]),1,0))
+  gate_diff[i,]<-summary(lm(profits4w_real_p99_e~B+I(w*G),data = diff))$coefficients[3,c(1,2,4)]
   
-  for(k in 1:n_group){  
-    G<-ifelse(S>qt[k] & S<qt[k+1],1,0)
+  for(k in 1:n_group){
+    G<-ifelse(S>qt[k] & S<=qt[k+1],1,0)
     gate<-lm(profits4w_real_p99_e~B+I(w*G),data = cbind(main_df,B,S,x,w,G))
-    gate_coef[i,c((2*k)-1,2*k)]<-summary(gate)$coefficients[3,c(1,2)]
+    gate_coef[i,((3*k)-2):(3*k)]<-summary(gate)$coefficients[3,c(1,2,4)]
     
     # data preparation for later
     gate_mean[i,((k*mcol)-(mcol-1)):(k*mcol)]<-apply(main_df[which(G==1),],2,mean)
-  }  
+  }
+  #Classificaton Analysis (CLAN)
+  diff2<-diff%>%select(-profits4w_real_p99_e,-assigned,-B,-w,-G,-ind_found_b,
+                       -D_1,-D_2,-D_3,-D_4,-D_5,-D_6,-D_7,-D_8,-D_9,-D_10,-D_11,-D_12,-D_13)
+  n<-ncol(diff2)
+  
+  for (j in (1:n)){
+    #two sample t test
+    b<-t.test(diff2%>%filter(S>qt[n_group])%>%.[,j],diff2%>%filter(S<qt[2])%>%.[,j],
+              alternative="two.sided",var.equal=F)
+    clan[((i*n)-n+j),1]<-b$estimate[1]-b$estimate[2]
+    clan[((i*n)-n+j),2]<-b$stderr
+    clan[((i*n)-n+j),3:4]<-b$conf.int
+    clan[((i*n)-n+j),5]<-b$p.value
+    clan[((i*n)-n+j),6]<-colnames(diff2)[j]
+    
+    #one sample t test
+    d<-t.test(diff2%>%filter(S<=qt[2])%>%.[,j])
+    clan_os[((i*n)-n+j),1]<-d$estimate
+    clan_os[((i*n)-n+j),2:3]<-d$conf.int
+    d<-t.test(diff2%>%filter(S>qt[n_group])%>%.[,j])
+    clan_os[((i*n)-n+j),4]<-d$estimate
+    clan_os[((i*n)-n+j),5:6]<-d$conf.int
+    clan_os[((i*n)-n+j),7]<-colnames(diff2)[j]
+  }
 }  
 
 # check distribution of p value
@@ -114,7 +151,8 @@ hist(blp_coef$P_value_B2)
 # obtain median values
 # data for each column does not correspond to the same split
 apply(blp_coef,2,median) #median for Best Linear Predictor 
-apply(gate_coef,2,median) #median for Grouped Average Treatment Effect
+apply(gate_coef,2,median) #median for Grouped Average Treatment Effect (GATE)
+apply(gate_diff,2,median) #median for difference in GATE between G1 and Gk
 
 # examining heterogeneity
 
@@ -141,4 +179,26 @@ ggplot(het_sub, aes(gate, median, color = covariate)) +
   geom_line() +
   facet_wrap(~covariate,scales = "free_y") +
   theme_fivethirtyeight()
+
+#classification analysis (CLAN)
+col<-clan$var %>% unique
+
+clan_os_med<-matrix(ncol = 7,nrow = length(col)) %>% as.data.frame()
+colnames(clan_os_med)<-c('g1','g1_lower_conf','g1_upper_conf','gk','gk_lower_conf','gk_upper_conf','var')
+
+clan_med<-matrix(ncol = 6,nrow = length(col)) %>% as.data.frame()
+colnames(clan_med)<-c('estimate','SE','lower_conf','upper_conf','P_value','var')
+
+#obtain medians of means and confidence interval for G1 and GK (1 sample t test)
+for (i in col){
+  clan_os_med[which(col==i),]<-clan %>% filter(var==i) %>% select(-var) %>% apply(2,median) %>% 
+    as.list() %>% as.data.frame() %>% mutate(var=i)
+}
+
+# obtain medians for difference in means for G1 and GK (2 sample t test)
+for (i in col){
+  clan_med[which(col==i),]<-clan %>% filter(var==i) %>% select(-var) %>% apply(2,median) %>% 
+  as.list() %>% as.data.frame() %>% mutate(var=i)
+}
+
 
