@@ -147,13 +147,37 @@ for(i in 1:n_split){
 
 # check distribution of p value
 hist(blp_coef$P_value_B2)
+hist(gate_coef$P_value5)
 
 # obtain median values
 # data for each column does not correspond to the same split
 apply(blp_coef,2,median) #median for Best Linear Predictor 
-apply(gate_coef,2,median) #median for Grouped Average Treatment Effect (GATE)
+t<-apply(gate_coef,2,median) #median for Grouped Average Treatment Effect (GATE)
 apply(gate_diff,2,median) #median for difference in GATE between G1 and Gk
 
+# plot GATE with confidence bands 
+ci<-matrix(ncol = 4,nrow = 5) %>% as.data.frame()
+colnames(ci)<-c('group','estimate','SE','P_value')
+ci<-ci %>% mutate(group=1:5)
+
+for (k in 1:5){
+ci[k,2:4]<-t[((k*3)-2):(k*3)]
+}
+
+ggplot(ci, aes(x=group, y=estimate)) +
+  geom_point() + 
+  geom_errorbar(width=.5, aes(ymin=estimate-(1.647*SE), ymax=estimate+(1.647*SE)), colour="black") +
+  xlab('Group') +
+  ylab('Treatment Effect') +
+  labs(title="GATE with confidence bands", 
+       subtitle="Point estimates and confidence bands are derived using median of all splits") +
+  geom_hline(yintercept=confint(lm(profits4w_real_p99_e~.,data=x),level=0.9)[2,], 
+             linetype="longdash",
+             col='darkred') +
+  geom_hline(yintercept=summary(lm(profits4w_real_p99_e~.,data=x))$coefficients[2,1], 
+             linetype="longdash",
+             col='blue')
+  
 # examining heterogeneity
 
 for(k in 1:n_group) { 
