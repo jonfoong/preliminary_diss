@@ -152,31 +152,56 @@ hist(gate_coef$P_value5)
 # obtain median values
 # data for each column does not correspond to the same split
 apply(blp_coef,2,median) #median for Best Linear Predictor 
-t<-apply(gate_coef,2,median) #median for Grouped Average Treatment Effect (GATE)
+apply(gate_coef,2,median) #median for Grouped Average Treatment Effect (GATE)
 apply(gate_diff,2,median) #median for difference in GATE between G1 and Gk
 
 # plot GATE with confidence bands 
-ci<-matrix(ncol = 4,nrow = 5) %>% as.data.frame()
-colnames(ci)<-c('group','estimate','SE','P_value')
-ci<-ci %>% mutate(group=1:5)
+ci<-data.frame(group = 1:5,estimate = NA,SE = NA,P_value=NA)
 
 for (k in 1:5){
-ci[k,2:4]<-t[((k*3)-2):(k*3)]
+ci[k,2:4]<-apply(gate_coef,2,median)[((k*3)-2):(k*3)]
 }
 
-ggplot(ci, aes(x=group, y=estimate)) +
-  geom_point() + 
-  geom_errorbar(width=.5, aes(ymin=estimate-(1.647*SE), ymax=estimate+(1.647*SE)), colour="black") +
-  xlab('Group') +
-  ylab('Treatment Effect') +
-  labs(title="GATE with confidence bands", 
-       subtitle="Point estimates and confidence bands are derived using median of all splits") +
-  geom_hline(yintercept=confint(lm(profits4w_real_p99_e~.,data=x),level=0.9)[2,], 
-             linetype="longdash",
-             col='darkred') +
-  geom_hline(yintercept=summary(lm(profits4w_real_p99_e~.,data=x))$coefficients[2,1], 
-             linetype="longdash",
-             col='blue')
+labels <- c(point = "GATE estimate", error = "GATE 90% CI", 
+            blue = "Sample-wide ATE", darkred = "ATE 90% CI")
+breaks <- c("blue", "darkred", "point", "error")
+
+ggplot(ci, aes(x = group, y = estimate)) +
+  geom_point(aes(color = "point"), size = 3) +
+  geom_errorbar(width = .5, aes(
+    ymin = estimate - (1.647 * SE),
+    ymax = estimate + (1.647 * SE),
+    color = "error"
+  )) +
+  scale_color_manual(values = c(
+    point = "black",
+    error = "black",
+    blue = "blue",
+    darkred = "darkred"
+  ), labels = labels, breaks = breaks) +
+  labs(
+    title = "GATE with confidence bands",
+    subtitle = "Point estimates and confidence bands are derived using median of all splits",
+    x = "Group",
+    y = "Treatment Effect",
+    color = NULL, linetype = NULL, shape = NULL
+  ) +
+  geom_hline(
+    data = data.frame(yintercept = confint(lm(profits4w_real_p99_e~.,data=x),level=0.9)[2,]),
+    aes(yintercept = yintercept, color = "darkred"), linetype = "longdash"
+  ) +
+  geom_hline(
+    data = data.frame(yintercept = summary(lm(profits4w_real_p99_e~.,data=x))$coefficients[2,1]),
+    aes(yintercept = yintercept, color = "blue"), linetype = "longdash"
+  ) +
+  guides(color = guide_legend(override.aes = list(
+    shape = c(NA, NA, 16, NA),
+    linetype = c("longdash", "longdash", "blank", "solid")
+  ), nrow = 2, byrow = TRUE)) +
+  theme(legend.position = c(0, 1), 
+        legend.justification = c(0, 1), 
+        legend.background = element_rect(fill = NA),
+        legend.key = element_rect(fill = NA))
   
 # examining heterogeneity
 
