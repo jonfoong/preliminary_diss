@@ -33,16 +33,8 @@ sum(x%>%is.na())/(ncol(x)*nrow(x))
 #compute proportion of missing outcome values
 sum(x$profits4w_real_p99_e%>%is.na())/nrow(x)
 
-#eliminate NA values (assume missingness is random)
+#eliminate NA values (robustness checks with lee and manski bounds to be added)
 df<-x[which(complete.cases(x)),]
-
-#impute outcome values using median (assume missingness is non random)
-df<-x %>% mutate(profits4w_real_p99_e=ifelse(is.na(profits4w_real_p99_e),
-                                             median(x$profits4w_real_p99_e,na.rm = T),
-                                             profits4w_real_p99_e))
-
-#impute NA values for other vars
-df<-rfImpute(profits4w_real_p99_e~.,df,ntree=500,iter=6)
 
 # create empty dataframes to store values
 n_split<-100
@@ -187,11 +179,11 @@ ggplot(ci, aes(x = group, y = estimate)) +
     color = NULL, linetype = NULL, shape = NULL
   ) +
   geom_hline(
-    data = data.frame(yintercept = confint(lm(profits4w_real_p99_e~.,data=x),level=0.9)[2,]),
+    data = data.frame(yintercept = 18.19+c(-1,1)*(1.646*4.898)),
     aes(yintercept = yintercept, color = "darkred"), linetype = "longdash"
-  ) +
+  ) + # ATE and CI from original paper
   geom_hline(
-    data = data.frame(yintercept = summary(lm(profits4w_real_p99_e~.,data=x))$coefficients[2,1]),
+    data = data.frame(yintercept = 18.19),
     aes(yintercept = yintercept, color = "blue"), linetype = "longdash"
   ) +
   guides(color = guide_legend(override.aes = list(
@@ -201,7 +193,8 @@ ggplot(ci, aes(x = group, y = estimate)) +
   theme(legend.position = c(0, 1), 
         legend.justification = c(0, 1), 
         legend.background = element_rect(fill = NA),
-        legend.key = element_rect(fill = NA))
+        legend.key = element_rect(fill = NA)) +
+  
   
 # examining heterogeneity
 
