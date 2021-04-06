@@ -243,12 +243,6 @@ for (i in col){
   as.list() %>% as.data.frame() %>% mutate(var=i)
 }
 
-clan_os_med[,c(7,1,2,3,4,5,6)] 
 clan_med[,c(6,1,2,3,4,5)] %>% filter(var!='S',P_value<=0.05) %>%
   arrange(-desc(P_value))
-  
-
-
-
-
 
