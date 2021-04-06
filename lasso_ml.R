@@ -1,6 +1,7 @@
 library(haven)
 library(tidyverse)
 library(randomForest)
+library(glmnet)
 library(ggthemes)
 
 # dataset based on:
@@ -73,14 +74,16 @@ for(i in 1:n_split){
   main_df<-df[main_ind,]
   
   # train data on auxiliary sample
-  rftreat<-randomForest(profits4w_real_p99_e~., data = (aux_df%>%filter(assigned==1)),
-                        ntree=500,nodesize=5)  
-  rfbase<-randomForest(profits4w_real_p99_e~., data = (aux_df%>%filter(assigned==0)), 
-                       ntree=500,nodesize=5)
+  train.mat<-model.matrix(profits4w_real_p99_e~., data=(aux_df%>%filter(assigned==1)))
+  lasstreat<-cv.glmnet(x=train.mat,y=aux_df%>%filter(assigned==1)%>%.$profits4w_real_p99_e,alpha=1)  
+  
+  train.mat<-model.matrix(profits4w_real_p99_e~., data=(aux_df%>%filter(assigned==0)))
+  lassbase<-cv.glmnet(x=train.mat,y=aux_df%>%filter(assigned==0)%>%.$profits4w_real_p99_e,alpha=1) 
   
   # predict baseline and treatment outcomes on main sample
-  B<-predict(rfbase,main_df)
-  treat<-predict(rftreat,main_df)
+  pred.mat<-model.matrix(profits4w_real_p99_e~., data=main_df)
+  B<-predict(lassbase,pred.mat,s=rfbase$lambda.min) %>% as.numeric()
+  treat<-predict(lasstreat,pred.mat,s=rftreat$lambda.min) %>% as.numeric()
   
   # specifying regression variables
   S<-treat-B #CATE: what the algorithm predicts is an individual's treatment effect
@@ -150,7 +153,7 @@ apply(gate_diff,2,median) #median for difference in GATE between G1 and Gk
 ci<-data.frame(group = 1:5,estimate = NA,SE = NA,P_value=NA)
 
 for (k in 1:5){
-ci[k,2:4]<-apply(gate_coef,2,median)[((k*3)-2):(k*3)]
+  ci[k,2:4]<-apply(gate_coef,2,median)[((k*3)-2):(k*3)]
 }
 
 labels <- c(point = "GATE estimate", error = "GATE 90% CI", 
@@ -195,12 +198,12 @@ ggplot(ci, aes(x = group, y = estimate)) +
         legend.key = element_rect(fill = NA)) +
   
   
-# examining heterogeneity
-
-for(k in 1:n_group) { 
-  nam <- paste("gate_mean", k, sep = "")
-  assign(nam, gate_mean[,((k*mcol)-(mcol-1)):(k*mcol)])
-}
+  # examining heterogeneity
+  
+  for(k in 1:n_group) { 
+    nam <- paste("gate_mean", k, sep = "")
+    assign(nam, gate_mean[,((k*mcol)-(mcol-1)):(k*mcol)])
+  }
 
 het<-matrix(ncol = mcol,nrow = n_group) %>% as.data.frame() %>%
   mutate(gate=1:n_group)
@@ -240,15 +243,9 @@ for (i in col){
 # obtain medians for difference in means for G1 and GK (2 sample t test)
 for (i in col){
   clan_med[which(col==i),]<-clan %>% filter(var==i) %>% select(-var) %>% apply(2,median) %>% 
-  as.list() %>% as.data.frame() %>% mutate(var=i)
+    as.list() %>% as.data.frame() %>% mutate(var=i)
 }
 
 clan_os_med[,c(7,1,2,3,4,5,6)] 
 clan_med[,c(6,1,2,3,4,5)] %>% filter(var!='S',P_value<=0.05) %>%
   arrange(-desc(P_value))
-  
-
-
-
-
-
