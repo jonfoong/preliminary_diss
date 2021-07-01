@@ -1,8 +1,9 @@
 library(haven)
 library(tidyverse)
-library(randomForest)
-library(glmnet)
 library(ggthemes)
+library(xgboost)
+library(caret)
+library(modelr)
 
 # dataset based on:
 # Generating Skilled Self-Employment in Developing Countries: Experimental Evidence 
@@ -18,20 +19,17 @@ library(ggthemes)
 
 #some data cleaning
 
-x<-read_dta('https://www.dropbox.com/s/yxgigmtcrut9fii/yop_analysis.dta?dl=1') %>% 
-  filter(e2==1) %>%  #filter results only from endline survey1
-  select(assigned,S_K,S_H,S_P_m,
-         admin_cost_us,groupsize_est_e,grantsize_pp_US_est3,group_existed,group_age,ingroup_hetero,ingroup_dynamic,grp_leader,grp_chair,avgdisteduc,
-         lowskill7da_zero,lowbus7da_zero,skilledtrade7da_zero,highskill7da_zero,acto7da_zero,aghours7da_zero,chores7da_zero,zero_hours,nonag_dummy,
-         age,urban,ind_found_b,risk_aversion,inschool,
-         D_1,D_2,D_3,D_4,D_5,D_6,D_7,D_8,D_9,D_10,D_11,D_12,D_13,
-         profits4w_real_p99_e)
+df_main<-read_dta('https://www.dropbox.com/s/yxgigmtcrut9fii/yop_analysis.dta?dl=1') 
 
-#compute proportion of all NA values
-sum(x%>%is.na())/(ncol(x)*nrow(x))
-
-#compute proportion of missing outcome values
-sum(x$profits4w_real_p99_e%>%is.na())/nrow(x)
+x<-df_main %>% filter(e1==1) %>%  #filter results only from endline survey1
+  dplyr::select(assigned,S_K,S_H,S_P_m,
+                admin_cost_us,groupsize_est_e,grantsize_pp_US_est3,group_existed,
+                group_age,ingroup_hetero,ingroup_dynamic,grp_leader,grp_chair,avgdisteduc,
+                lowskill7da_zero,lowbus7da_zero,skilledtrade7da_zero,highskill7da_zero,
+                acto7da_zero,aghours7da_zero,chores7da_zero,zero_hours,nonag_dummy,
+                age,urban,ind_found_b,risk_aversion,inschool,
+                D_1,D_2,D_3,D_4,D_5,D_6,D_7,D_8,D_9,D_10,D_11,D_12,D_13,
+                bizasset_val_real_p99_e,voc_training)
 
 #eliminate NA values (robustness checks with lee and manski bounds to be added)
 df<-x[which(complete.cases(x)),]
@@ -63,6 +61,24 @@ mcol<-ncol(df)
 gate_mean<-matrix(ncol = mcol*n_group,nrow = n_split)
 colnames(gate_mean)<-rep(colnames(df[,]),n_group)
 
+# set hyperparameters
+
+tunegridtreat <- expand.grid(nrounds=100,
+                            eta=0.05,
+                            gamma=4,
+                            max_depth=1,
+                            min_child_weight=1,
+                            subsample=.85,
+                            colsample_bytree=.59)
+
+tunegridbase <- expand.grid(nrounds=100,
+                        eta=0.05,
+                        gamma=4,
+                        max_depth=2,
+                        min_child_weight=1,
+                        subsample=0.7,
+                        colsample_bytree=0.3)
+
 #split data
 set.seed(55,sample.kind = 'Rounding')
 start<-Sys.time()
@@ -76,16 +92,24 @@ for(i in 1:n_split){
   main_df<-df[main_ind,]
   
   # train data on auxiliary sample
-  train.mat<-model.matrix(profits4w_real_p99_e~., data=(aux_df%>%filter(assigned==1)))
-  lasstreat<-cv.glmnet(x=train.mat,y=aux_df%>%filter(assigned==1)%>%.$profits4w_real_p99_e,alpha=0)  
+  # hyperparameters preselected using cross validation
+  xgbtreat<-train(bizasset_val_real_p99_e~., data=aux_df %>% filter(assigned==1) %>%
+                    select(-assigned), 
+                  method='xgbTree',
+                  metric='RMSE', 
+                  tuneGrid=tunegridtreat, 
+                  objective = "reg:squarederror")
   
-  train.mat<-model.matrix(profits4w_real_p99_e~., data=(aux_df%>%filter(assigned==0)))
-  lassbase<-cv.glmnet(x=train.mat,y=aux_df%>%filter(assigned==0)%>%.$profits4w_real_p99_e,alpha=0) 
+  xgbbase<-train(bizasset_val_real_p99_e~., data=aux_df %>% filter(assigned==0) %>%
+                    select(-assigned), 
+                  method='xgbTree',
+                  metric='RMSE', 
+                  tuneGrid=tunegridbase, 
+                  objective = "reg:squarederror")
   
   # predict baseline and treatment outcomes on main sample
-  pred.mat<-model.matrix(profits4w_real_p99_e~., data=main_df)
-  B<-predict(lassbase,pred.mat,s=lassbase$lambda.min) %>% as.numeric()
-  treat<-predict(lasstreat,pred.mat,s=lasstreat$lambda.min) %>% as.numeric()
+  B<-predict(xgbbase,main_df)
+  treat<-predict(xgbtreat,main_df)
   
   # specifying regression variables
   S<-treat-B #CATE: what the algorithm predicts is an individual's treatment effect
@@ -95,11 +119,13 @@ for(i in 1:n_split){
   w<-main_df$assigned-p #weighted treatment var
   
   #derive Best Linear Predictor from main sample
-  blp<-lm(profits4w_real_p99_e~B+w+I((w*x)),data=cbind(main_df,B,S,x,w))
+  v<-cbind(main_df,B,S,x,w)
+  blp<-lm(bizasset_val_real_p99_e~B+w+I((w*x)),data=v)
   blp_coef[i,]<-c(blp$coefficients[3],summary(blp)$coefficients[3:4,c(2,4)][1,],
                   blp$coefficients[4],summary(blp)$coefficients[3:4,c(2,4)][2,],
                   rmse(blp,data=cbind(main_df,B,S,x,w)),
-                  lambda=(abs(blp_coef[4])^2)*var(S))
+                  lambda=((cor.test(v$bizasset_val_real_p99_e,v$S) %>% .$estimate)^2)*var(v$bizasset_val_real_p99_e))
+  
   
   
   #Group Average Treatment Effect
@@ -107,18 +133,18 @@ for(i in 1:n_split){
   diff<-cbind(main_df,B,S,w) %>% 
     filter(S<=qt[2]|S>qt[n_group]) %>%
     mutate(G=ifelse((S>qt[n_group]),1,0))
-  gate_diff[i,]<-summary(lm(profits4w_real_p99_e~B+I(w*G),data = diff))$coefficients[3,c(1,2,4)]
+  gate_diff[i,]<-summary(lm(bizasset_val_real_p99_e~B+I(w*G),data = diff))$coefficients[3,c(1,2,4)]
   
   for(k in 1:n_group){
     G<-ifelse(S>qt[k] & S<=qt[k+1],1,0)
-    gate<-lm(profits4w_real_p99_e~B+I(w*G),data = cbind(main_df,B,S,x,w,G))
+    gate<-lm(bizasset_val_real_p99_e~B+I(w*G),data = cbind(main_df,B,S,x,w,G))
     gate_coef[i,((3*k)-2):(3*k)]<-summary(gate)$coefficients[3,c(1,2,4)]
     
     # data preparation for later
     gate_mean[i,((k*mcol)-(mcol-1)):(k*mcol)]<-apply(main_df[which(G==1),],2,mean)
   }
   #Classificaton Analysis (CLAN)
-  diff2<-diff%>%select(-profits4w_real_p99_e,-assigned,-B,-w,-G,-ind_found_b,
+  diff2<-diff%>%select(-bizasset_val_real_p99_e,-assigned,-B,-w,-G,-ind_found_b,
                        -D_1,-D_2,-D_3,-D_4,-D_5,-D_6,-D_7,-D_8,-D_9,-D_10,-D_11,-D_12,-D_13)
   n<-ncol(diff2)
   
@@ -142,7 +168,6 @@ for(i in 1:n_split){
     clan_os[((i*n)-n+j),7]<-colnames(diff2)[j]
   }
 }  
-
 end<-Sys.time()
 end-start
 
@@ -157,9 +182,9 @@ apply(gate_coef,2,median) #median for Grouped Average Treatment Effect (GATE)
 apply(gate_diff,2,median) #median for difference in GATE between G1 and Gk
 
 # plot GATE with confidence bands 
-ci<-data.frame(group = 1:5,estimate = NA,SE = NA,P_value=NA)
+ci<-data.frame(group = 1:n_group,estimate = NA,SE = NA,P_value=NA)
 
-for (k in 1:5){
+for (k in 1:n_group){
   ci[k,2:4]<-apply(gate_coef,2,median)[((k*3)-2):(k*3)]
 }
 
@@ -181,14 +206,15 @@ ggplot(ci, aes(x = group, y = estimate)) +
     darkred = "darkred"
   ), labels = labels, breaks = breaks) +
   labs(
-    title = "GATE with confidence bands (Ridge Regression)",
+    title = "GATE with confidence bands (XGB)",
     subtitle = "Point estimates and confidence bands are derived using median of all splits",
     x = "Group",
     y = "Treatment Effect",
     color = NULL, linetype = NULL, shape = NULL
   ) +
   geom_hline(
-    data = data.frame(yintercept = 18.19+c(-1,1)*(1.646*4.898)),
+    data = data.frame(yintercept = 18.19+c(-1,1)*(1.646*4.898)), # for endline 2 it's 18.19 (4.898)
+                                                                 # for endline 1 it's 14.61 (4.073)
     aes(yintercept = yintercept, color = "darkred"), linetype = "longdash"
   ) + # ATE and CI from original paper
   geom_hline(
@@ -202,15 +228,15 @@ ggplot(ci, aes(x = group, y = estimate)) +
   theme(legend.position = c(0, 1), 
         legend.justification = c(0, 1), 
         legend.background = element_rect(fill = NA),
-        legend.key = element_rect(fill = NA)) +
+        legend.key = element_rect(fill = NA))
   
   
-  # examining heterogeneity
+# examining heterogeneity
   
-  for(k in 1:n_group) { 
+for(k in 1:n_group) { 
     nam <- paste("gate_mean", k, sep = "")
     assign(nam, gate_mean[,((k*mcol)-(mcol-1)):(k*mcol)])
-  }
+}
 
 het<-matrix(ncol = mcol,nrow = n_group) %>% as.data.frame() %>%
   mutate(gate=1:n_group)
@@ -253,6 +279,6 @@ for (i in col){
     as.list() %>% as.data.frame() %>% mutate(var=i)
 }
 
-clan_os_med[,c(7,1,2,3,4,5,6)] 
-clan_med[,c(6,1,2,3,4,5)] %>% filter(var!='S',P_value<=0.05) %>%
+clan_med[,c(6,1,2,3,4,5)] %>% filter(var!='S',P_value<=1) %>%
   arrange(-desc(P_value))
+
